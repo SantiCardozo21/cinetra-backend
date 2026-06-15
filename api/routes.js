@@ -32,19 +32,26 @@ router.get('/data/:collection', async (req, res) => {
   const allowed = ['peliculas', 'series', 'anime', 'canales', 'partidos'];
   if (!allowed.includes(collection)) return res.status(400).json({ error: 'Colección no válida' });
 
-  const { limit = '50', offset = '0', plataforma, search } = req.query;
+  const { limit = '50', plataforma, search, search_genero } = req.query;
   const db = getDb();
-  let q = db.collection(collection).limit(parseInt(limit));
+  let q = db.collection(collection).limit(Math.min(parseInt(limit) || 150, 500));
 
   if (plataforma) q = q.where('plataforma', '==', plataforma);
 
   const snap = await q.get();
   let docs = snap.docs.map(d => ({ id: d.id, ...d.data() }));
 
-  // Búsqueda client-side (Firestore no soporta substring)
+  // Filtros client-side (Firestore no soporta substring search)
   if (search) {
     const s = search.toLowerCase();
-    docs = docs.filter(d => (d.titulo || '').toLowerCase().includes(s));
+    docs = docs.filter(d =>
+      (d.titulo || '').toLowerCase().includes(s) ||
+      String(d.id || '').toLowerCase().includes(s)
+    );
+  }
+  if (search_genero) {
+    const g = search_genero.toLowerCase();
+    docs = docs.filter(d => (d.genero || '').toLowerCase().includes(g));
   }
 
   res.json({ data: docs, count: docs.length });
@@ -147,5 +154,47 @@ router.post('/migrate', auth, async (req, res) => {
     res.status(500).json({ ok: false, error: e.message });
   }
 });
+
+// ── GET /api/migrate — página HTML para disparar migración ───────────────────
+router.get('/migrate', (req, res) => {
+  if (req.query.key !== process.env.API_SECRET) {
+    return res.status(401).send('Unauthorized');
+  }
+  res.send(`<!DOCTYPE html>
+<html><head><meta charset="UTF-8"><title>Cinetra Migration</title>
+<style>
+  body{font-family:monospace;background:#0a0a0a;color:#fff;padding:40px;}
+  button{background:#E53935;color:#fff;border:none;padding:14px 28px;font-size:16px;cursor:pointer;border-radius:8px;}
+  button:disabled{background:#555;cursor:not-allowed;}
+  #log{margin-top:24px;background:#1a1a1a;padding:20px;border-radius:8px;white-space:pre-wrap;min-height:100px;font-size:13px;line-height:1.6;}
+  .ok{color:#4CAF50;}.err{color:#E53935;}
+</style></head><body>
+<h2>🎬 Cinetra — Migración Supabase → Firebase</h2>
+<button id="btn" onclick="migrate()">▶ Iniciar Migración</button>
+<div id="log">Esperando...</div>
+<script>
+async function migrate(){
+  const btn=document.getElementById('btn');
+  const log=document.getElementById('log');
+  btn.disabled=true; btn.textContent='⏳ Migrando... (puede tardar 5 min)';
+  log.innerHTML='Iniciando...\n';
+  try{
+    const r=await fetch('/api/migrate',{method:'POST',headers:{'x-api-key':'${process.env.API_SECRET}','Content-Type':'application/json'}});
+    const d=await r.json();
+    if(d.ok){
+      log.innerHTML='<span class="ok">✓ Completado!\n\n  Películas: '+d.migrated.peliculas+'\n  Series: '+d.migrated.series+'\n  Anime: '+d.migrated.anime+'\n  Canales: '+d.migrated.canales+'</span>';
+      btn.textContent='✓ Listo';
+    }else{
+      log.innerHTML='<span class="err">✗ Error: '+d.error+'</span>';
+      btn.disabled=false; btn.textContent='▶ Reintentar';
+    }
+  }catch(e){
+    log.innerHTML='<span class="err">✗ '+e.message+'</span>';
+    btn.disabled=false; btn.textContent='▶ Reintentar';
+  }
+}
+</script></body></html>`);
+});
+
 
 module.exports = router;
