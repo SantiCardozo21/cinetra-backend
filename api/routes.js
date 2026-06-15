@@ -91,4 +91,61 @@ router.get('/stats', auth, async (req, res) => {
   res.json({ peliculas: p, series: s, anime: a, canales: c, partidos: pt });
 });
 
+// ── /api/migrate — migrar Supabase → Firestore ───────────────────────────────
+router.post('/migrate', auth, async (req, res) => {
+  const SUPABASE_URL = process.env.SUPABASE_URL;
+  const SUPABASE_KEY = process.env.SUPABASE_SERVICE_KEY;
+  if (!SUPABASE_URL || !SUPABASE_KEY) {
+    return res.status(400).json({ error: 'Faltan SUPABASE_URL o SUPABASE_SERVICE_KEY' });
+  }
+
+  const fetch = require('node-fetch');
+  const db    = getDb();
+  const { slugify } = require('../db/firestore');
+  const results = {};
+
+  async function migrateTable(table, collection) {
+    let page = 0, total = 0;
+    while (true) {
+      const url = `${SUPABASE_URL}/rest/v1/${table}?select=*&limit=1000&offset=${page * 1000}`;
+      const res2 = await fetch(url, {
+        headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` }
+      });
+      const rows = await res2.json();
+      if (!Array.isArray(rows) || !rows.length) break;
+
+      const chunks = [];
+      for (let i = 0; i < rows.length; i += 400) chunks.push(rows.slice(i, i + 400));
+      for (const chunk of chunks) {
+        const batch = db.batch();
+        for (const row of chunk) {
+          const key = row.titulo || row.nombre || row.id || String(Date.now());
+          const id  = slugify(String(key)).slice(0, 80) || String(Date.now());
+          const ref = db.collection(collection).doc(id);
+          const clean = Object.fromEntries(
+            Object.entries(row).filter(([_, v]) => v !== null && v !== undefined)
+          );
+          batch.set(ref, clean, { merge: true });
+        }
+        await batch.commit();
+      }
+      total += rows.length;
+      page++;
+      if (rows.length < 1000) break;
+      await new Promise(r => setTimeout(r, 300));
+    }
+    return total;
+  }
+
+  try {
+    results.peliculas = await migrateTable('peliculas', 'peliculas');
+    results.series    = await migrateTable('series',    'series');
+    results.anime     = await migrateTable('anime',     'anime');
+    results.canales   = await migrateTable('canales',   'canales');
+    res.json({ ok: true, migrated: results });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
 module.exports = router;
