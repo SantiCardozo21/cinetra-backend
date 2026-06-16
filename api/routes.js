@@ -197,4 +197,74 @@ async function migrate(){
 });
 
 
+// ── /api/embed — extraer URL del player embed (sin Puppeteer) ────────────────
+// Railway solo extrae la URL del embed; el WebView del Android resuelve el m3u8
+router.get('/embed', async (req, res) => {
+  const { url } = req.query;
+  if (!url) return res.status(400).json({ error: 'Falta ?url=' });
+
+  try {
+    const fetch = require('node-fetch');
+    const UA    = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36';
+
+    // ── PoseidonHD → leer __NEXT_DATA__ y devolver URL del player ───────────
+    if (url.includes('poseidonhd2.co')) {
+      const html = await fetch(url, { headers: { 'User-Agent': UA, 'Referer': 'https://www.poseidonhd2.co' }, timeout: 12000 }).then(r => r.text()).catch(() => null);
+      if (!html) return res.json({ ok: false, error: 'No se pudo cargar la página' });
+
+      const m = html.match(/<script[^>]+id="__NEXT_DATA__"[^>]*>([\s\S]*?)<\/script>/i);
+      if (!m) return res.json({ ok: false, error: 'No se encontró __NEXT_DATA__' });
+
+      const data   = JSON.parse(m[1]);
+      const props  = data?.props?.pageProps;
+      const videos = props?.thisMovie?.videos || props?.thisTvshow?.videos || props?.thisEpisode?.videos;
+      if (!videos) return res.json({ ok: false, error: 'No hay videos en __NEXT_DATA__' });
+
+      const PREFS = ['streamwish', 'filemoon', 'vidhide', 'voesx'];
+      let embedUrl = null;
+      for (const lang of ['latino', 'spanish', 'english']) {
+        const arr = videos[lang];
+        if (!arr?.length) continue;
+        for (const pref of PREFS) {
+          const e = arr.find(x => x.cyberlocker === pref && x.result?.startsWith('http'));
+          if (e) { embedUrl = e.result; break; }
+        }
+        if (!embedUrl) {
+          const first = arr.find(x => x.result?.startsWith('http'));
+          if (first) embedUrl = first.result;
+        }
+        if (embedUrl) break;
+      }
+
+      if (embedUrl) return res.json({ ok: true, embedUrl });
+      return res.json({ ok: false, error: 'No se encontró embed en videos' });
+    }
+
+    // ── PelisJuanita → movieInfo.php para obtener URL del servidor ───────────
+    if (url.includes('pelisjuanita.com')) {
+      const slug = url.replace(/\/$/, '').split('/').pop();
+      const infoUrl = `https://pelisjuanita.com/movies/movieInfo.php?title=${encodeURIComponent(slug)}`;
+      const html = await fetch(infoUrl, { headers: { 'User-Agent': UA, 'Referer': url }, timeout: 10000 }).then(r => r.text()).catch(() => null);
+      if (!html) return res.json({ ok: false, error: 'movieInfo.php no respondió' });
+
+      const servers = [];
+      const re = /data-url=['"]?(https?:\/\/[^'">\s]+)/g;
+      let em;
+      while ((em = re.exec(html)) !== null) {
+        const u = em[1];
+        if (!u.includes('youtube') && !u.includes('1fichier')) servers.push(u);
+      }
+
+      if (servers.length) return res.json({ ok: true, embedUrl: servers[0] });
+      return res.json({ ok: false, error: 'No se encontraron servidores en movieInfo.php' });
+    }
+
+    // ── URL genérica → devolver la misma URL (el WebView la maneja) ──────────
+    res.json({ ok: true, embedUrl: url });
+
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
 module.exports = router;
