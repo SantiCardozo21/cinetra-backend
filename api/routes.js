@@ -61,6 +61,7 @@ router.get('/data/:collection', async (req, res) => {
 router.post('/scrape', auth, async (req, res) => {
   const { source, page = 1, batch = 5 } = req.body;
 
+  const { enrichAnime } = require('../scrapers/anime');
   const map = {
     'poseidon-movies':    () => scrapePoseidonMovies(page),
     'poseidon-series':    () => scrapePoseidonSeries(page),
@@ -70,6 +71,7 @@ router.post('/scrape', auth, async (req, res) => {
     'enrich-juanita':     () => enrichJuanitaSeries(batch),
     'animeflv':           () => scrapeAnimeFLV(page),
     'jkanime':            () => scrapeJKAnime(page),
+    'enrich-anime':       () => enrichAnime(batch),
     'futbol':             () => scrapeFutbol(),
     'canales':            () => scrapeCanales(),
   };
@@ -265,6 +267,25 @@ router.get('/embed', async (req, res) => {
   } catch (e) {
     res.status(500).json({ ok: false, error: e.message });
   }
+});
+
+// ── /api/delete-collection — borrar colección completa ───────────────────────
+router.delete('/collection/:name', auth, async (req, res) => {
+  const { name } = req.params;
+  const allowed = ['peliculas', 'series', 'anime', 'canales', 'partidos'];
+  if (!allowed.includes(name)) return res.status(400).json({ error: 'Colección no válida' });
+  
+  const db = getDb();
+  let deleted = 0;
+  while (true) {
+    const snap = await db.collection(name).limit(400).get();
+    if (snap.empty) break;
+    const batch = db.batch();
+    snap.docs.forEach(d => batch.delete(d.ref));
+    await batch.commit();
+    deleted += snap.size;
+  }
+  res.json({ ok: true, collection: name, deleted });
 });
 
 module.exports = router;
