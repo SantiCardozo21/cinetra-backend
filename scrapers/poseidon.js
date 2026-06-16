@@ -117,8 +117,7 @@ async function scrapePoseidonSeries(page = 1) {
     if (!tvshow) continue;
 
     // Para series: extraer embed del primer episodio disponible
-    const embedUrl = extractEmbedUrl(tvshow.videos);
-    if (!embedUrl) continue;
+    const embedUrl = extractEmbedUrl(tvshow.videos) || '';
 
     const year = (tvshow.releaseDate || s.releaseDate || '').substring(0, 4);
 
