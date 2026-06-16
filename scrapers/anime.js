@@ -86,26 +86,45 @@ async function scrapeJKAnime(page = 1) {
   const $ = cheerio.load(html);
   const results = [];
 
-  $('.anime_card').each((_, el) => {
-    const a      = $('a.title, h3 a, a', el).first();
-    const titulo = a.text().trim();
-    const href   = a.attr('href') || '';
-    const poster = $('img', el).attr('src') || '';
-    const slug   = href.replace(/\/$/, '').split('/').pop();
-    if (!titulo || !slug) return;
-    results.push({
-      titulo,
-      genero:          '',
-      sinopsis:        '',
-      poster_url:      poster,
-      link:            href.startsWith('http') ? href : JKANIME_BASE + '/' + slug + '/',
-      slug,
-      plataforma:      'JKAnime',
-      episodios:       {},
-      temporadas:      1,
-      ultimo_episodio: 0,
+  // Múltiples selectores posibles para JKAnime
+  const cardSels = ['.anime_card', '.card', 'article', '.anime-card', 'li.anime'];
+  let found = false;
+  for (const sel of cardSels) {
+    $(sel).each((_, el) => {
+      const a      = $('a[href*="jkanime"], a[href*="/anime/"], h3 a, a', el).first();
+      const titulo = a.text().trim() || $('h3, h2, .title', el).first().text().trim();
+      const href   = a.attr('href') || '';
+      const poster = $('img', el).attr('src') || $('img', el).attr('data-src') || '';
+      const slug   = href.replace(/\/$/, '').split('/').filter(Boolean).pop() || '';
+      if (!titulo || !slug || titulo.length < 2) return;
+      found = true;
+      results.push({
+        titulo,
+        genero:          '',
+        sinopsis:        '',
+        poster_url:      poster,
+        link:            href.startsWith('http') ? href : `${JKANIME_BASE}/${slug}/`,
+        slug,
+        plataforma:      'JKAnime',
+        episodios:       {},
+        temporadas:      1,
+        ultimo_episodio: 0,
+      });
     });
-  });
+    if (results.length) break;
+  }
+  // Si aún no hay resultados, buscar cualquier link a anime
+  if (!results.length) {
+    $('a[href]').each((_, el) => {
+      const href = $(el).attr('href') || '';
+      if (!href.includes(JKANIME_BASE) && !href.startsWith('/')) return;
+      const titulo = $(el).text().trim() || $(el).attr('title') || '';
+      if (!titulo || titulo.length < 3) return;
+      const slug = href.replace(/\/$/, '').split('/').filter(Boolean).pop() || '';
+      if (!slug || results.find(r => r.slug === slug)) return;
+      results.push({ titulo, genero:'', sinopsis:'', poster_url:'', link: href.startsWith('http') ? href : `${JKANIME_BASE}/${slug}/`, slug, plataforma:'JKAnime', episodios:{}, temporadas:1, ultimo_episodio:0 });
+    });
+  }
 
   return results.length ? await upsertMany('anime', results) : 0;
 }
